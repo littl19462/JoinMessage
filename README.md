@@ -1,17 +1,16 @@
-# JoinMessage 插件
+# JoinMessage 变更日志
 
-一个用于PaperMC服务器的插件，提供以下功能：
+## [Unreleased]
+### 新增
+- GitHub Actions 自动发布流程
+- 自动生成变更日志功能
+
+## [v1.0.0] - 2025-08-03
+### 新增
 - 自定义玩家加入/退出消息
-- 玩家加入时发送"一言"
+- 玩家加入时发送一言
 - 整点报时功能
-- 支持PlaceholderAPI
-- 兼容Paper 1.12.2 - 1.21.9
+- PlaceholderAPI 支持
 
-## 安装
-1. 将构建的JAR文件放入服务器的`plugins`文件夹
-2. 重启服务器
-3. 编辑`plugins/JoinMessage/config.yml`进行配置
-
-## 构建
-```bash
-mvn clean package
+### 兼容性
+- Paper 1.12.2 - 1.21.9
