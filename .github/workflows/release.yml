@@ -1,0 +1,93 @@
+name: Build and Release Plugin
+
+on:
+  push:
+    tags:
+      - 'v*' # 匹配所有以v开头的标签
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+    
+    steps:
+    # 1. 检出代码
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0 # 获取所有历史记录用于变更日志生成
+      
+    # 2. 设置Java环境
+    - name: Set up JDK 17
+      uses: actions/setup-java@v4
+      with:
+        java-version: '17'
+        distribution: 'temurin'
+        cache: 'maven'
+        
+    # 3. 从标签提取版本号
+    - name: Extract version from tag
+      id: extract-version
+      run: |
+        VERSION=${GITHUB_REF#refs/tags/v}
+        echo "RELEASE_VERSION=$VERSION" >> $GITHUB_ENV
+        echo "Using version: $VERSION"
+        
+    # 4. 生成变更日志
+    - name: Generate Changelog
+      id: changelog
+      uses: mikepenz/release-changelog-builder-action@v3
+      with:
+        token: ${{ secrets.GITHUB_TOKEN }}
+        configuration: |
+          categories:
+            - title: '🚀 新功能'
+              labels: ['feature', 'enhancement']
+            - title: '🐛 Bug 修复'
+              labels: ['bug', 'fix']
+            - title: '🔧 改进'
+              labels: ['improvement', 'refactor']
+        fromTag: 'v1.0.0' # 从哪个版本开始生成变更日志
+        toTag: ${{ github.ref }}
+        
+    # 5. 设置Maven版本
+    - name: Set Maven version
+      run: |
+        mvn versions:set -DnewVersion=${{ env.RELEASE_VERSION }}
+        
+    # 6. 构建插件
+    - name: Build plugin with Maven
+      run: mvn -B clean package
+      
+    # 7. 创建GitHub Release
+    - name: Create GitHub Release
+      uses: softprops/action-gh-release@v2
+      with:
+        files: |
+          target/JoinMessage-${{ env.RELEASE_VERSION }}.jar
+        name: JoinMessage ${{ env.RELEASE_VERSION }}
+        tag_name: v${{ env.RELEASE_VERSION }}
+        body: |
+          ## JoinMessage ${{ env.RELEASE_VERSION }}
+          
+          ${{ steps.changelog.outputs.changelog }}
+          
+          ### 安装说明
+          1. 下载 `JoinMessage-${{ env.RELEASE_VERSION }}.jar`
+          2. 放入服务器的 `plugins` 文件夹
+          3. 重启服务器
+          
+          [查看完整变更日志](https://github.com/${{ github.repository }}/blob/main/CHANGELOG.md)
+        draft: false
+        prerelease: ${{ contains(github.ref, '-rc.') || contains(github.ref, '-beta.') }}
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        
+    # 8. 发送通知（可选）
+    - name: Notify on Success
+      if: success()
+      uses: rtCamp/action-slack-notify@v2
+      env:
+        SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
+        SLACK_COLOR: good
+        SLACK_TITLE: "JoinMessage ${{ env.RELEASE_VERSION }} 发布成功"
+        SLACK_MESSAGE: "新版本已发布：${{ github.server_url }}/${{ github.repository }}/releases/tag/v${{ env.RELEASE_VERSION }}"
