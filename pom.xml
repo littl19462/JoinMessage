@@ -5,7 +5,6 @@
     
     <groupId>cn.littl19642</groupId>
     <artifactId>JoinMessage</artifactId>
-<revision>1.0.0</revision> <!-- 设置为首个正式版本 -->
     <!-- 使用动态版本号 -->
     <version>${revision}</version>
     
@@ -88,4 +87,5 @@
         </plugins>
     </build>
 </project>
+
 
