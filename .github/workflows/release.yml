@@ -3,18 +3,22 @@ name: Build and Release Plugin
 on:
   push:
     tags:
-      - 'v*' # 匹配所有以v开头的标签
+      - 'v*'   # 确保是小写 v 开头
 
 jobs:
   build-and-release:
     runs-on: ubuntu-latest
     
+    # 添加超时设置
+    timeout-minutes: 15
+    
     steps:
-    # 1. 检出代码
-    - name: Checkout code
+    # 1. 检出代码（包含标签）
+    - name: Checkout code with tags
       uses: actions/checkout@v4
       with:
-        fetch-depth: 0 # 获取所有历史记录用于变更日志生成
+        fetch-depth: 0  # 获取完整历史
+        ref: ${{ github.ref }}
       
     # 2. 设置Java环境
     - name: Set up JDK 17
@@ -28,66 +32,62 @@ jobs:
     - name: Extract version from tag
       id: extract-version
       run: |
-        VERSION=${GITHUB_REF#refs/tags/v}
+        # 提取版本号（兼容 v1.0.0 和 v1.0）
+        VERSION=$(echo "${{ github.ref }}" | sed 's/refs\/tags\/v//')
         echo "RELEASE_VERSION=$VERSION" >> $GITHUB_ENV
         echo "Using version: $VERSION"
         
-    # 4. 生成变更日志
-    - name: Generate Changelog
-      id: changelog
-      uses: mikepenz/release-changelog-builder-action@v3
-      with:
-        token: ${{ secrets.GITHUB_TOKEN }}
-        configuration: |
-          categories:
-            - title: '🚀 新功能'
-              labels: ['feature', 'enhancement']
-            - title: '🐛 Bug 修复'
-              labels: ['bug', 'fix']
-            - title: '🔧 改进'
-              labels: ['improvement', 'refactor']
-        fromTag: 'v1.0.0' # 从哪个版本开始生成变更日志
-        toTag: ${{ github.ref }}
-        
-    # 5. 设置Maven版本
+    # 4. 设置Maven版本
     - name: Set Maven version
       run: |
         mvn versions:set -DnewVersion=${{ env.RELEASE_VERSION }}
         
-    # 6. 构建插件
+    # 5. 构建插件
     - name: Build plugin with Maven
       run: mvn -B clean package
+      
+    # 6. 验证构建产物
+    - name: Verify artifacts
+      run: |
+        echo "Generated files:"
+        ls -la target/
+        if [ ! -f "target/JoinMessage-${{ env.RELEASE_VERSION }}.jar" ]; then
+          echo "ERROR: JAR file not found!"
+          exit 1
+        fi
       
     # 7. 创建GitHub Release
     - name: Create GitHub Release
       uses: softprops/action-gh-release@v2
       with:
         files: |
-          target/JoinMessage-${{ env.RELEASE_VERSION }}.jar
+          target/*.jar  # 使用通配符确保匹配
         name: JoinMessage ${{ env.RELEASE_VERSION }}
         tag_name: v${{ env.RELEASE_VERSION }}
         body: |
           ## JoinMessage ${{ env.RELEASE_VERSION }}
           
-          ${{ steps.changelog.outputs.changelog }}
-          
           ### 安装说明
-          1. 下载 `JoinMessage-${{ env.RELEASE_VERSION }}.jar`
+          1. 下载 JAR 文件
           2. 放入服务器的 `plugins` 文件夹
           3. 重启服务器
           
-          [查看完整变更日志](https://github.com/${{ github.repository }}/blob/main/CHANGELOG.md)
+          [查看完整文档](https://github.com/${{ github.repository }})
         draft: false
-        prerelease: ${{ contains(github.ref, '-rc.') || contains(github.ref, '-beta.') }}
+        prerelease: false
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         
-    # 8. 发送通知（可选）
-    - name: Notify on Success
-      if: success()
-      uses: rtCamp/action-slack-notify@v2
-      env:
-        SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
-        SLACK_COLOR: good
-        SLACK_TITLE: "JoinMessage ${{ env.RELEASE_VERSION }} 发布成功"
-        SLACK_MESSAGE: "新版本已发布：${{ github.server_url }}/${{ github.repository }}/releases/tag/v${{ env.RELEASE_VERSION }}"
+    # 8. 失败通知
+    - name: Notify on Failure
+      if: failure()
+      uses: actions/github-script@v7
+      with:
+        script: |
+          const message = `🚨 发布失败: ${{ github.repository }}@v${{ env.RELEASE_VERSION }}`;
+          github.rest.issues.createComment({
+            issue_number: context.issue.number,
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            body: message
+          });
