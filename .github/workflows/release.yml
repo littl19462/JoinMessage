@@ -1,7 +1,15 @@
 name: Build and Release Plugin
 
+# 权限设置 - 确保所有操作有足够权限
+permissions:
+  contents: write   # 允许创建 Release 和上传文件
+  issues: write     # 允许创建 Issue 评论
+  pull-requests: write # 允许创建 PR 评论
+  actions: read     # 允许读取工作流状态
+
+# 触发条件配置
 on:
-  # 添加手动触发支持
+  # 手动触发配置 - 允许通过 UI 或 API 手动运行
   workflow_dispatch:
     inputs:
       tag:
@@ -9,28 +17,37 @@ on:
         required: true
         default: 'v1.0.0'
         type: string
-  
-  # 保留原有的自动触发
+      skip_tests:
+        description: '跳过测试 (true/false)'
+        required: false
+        default: 'false'
+        type: boolean
+      
+  # 自动触发配置 - 推送以 v 开头的标签时触发
   push:
     tags:
       - 'v*'
 
+# 作业定义
 jobs:
   build-and-release:
+    name: Build and Release
     runs-on: ubuntu-latest
+    timeout-minutes: 25  # 设置超时时间
     
-    # 添加超时设置
-    timeout-minutes: 15
+    # 环境变量
+    env:
+      MAVEN_OPTS: -Dhttps.protocols=TLSv1.2 -Dmaven.repo.local=${{ github.workspace }}/.m2/repository
     
     steps:
-    # 1. 检出代码（包含标签）
-    - name: Checkout code with tags
-      uses: actions/checkout@v4
+    # ================ 初始化阶段 ================
+    - name: Checkout code
+      uses: actions/checkout@v4.1.1
       with:
         fetch-depth: 0  # 获取完整历史
-        ref: ${{ github.ref }}
-      
-    # 2. 设置Java环境
+        ref: ${{ github.event.inputs.tag || github.ref }}  # 支持手动指定标签
+    
+    # ================ 环境设置阶段 ================
     - name: Set up JDK 17
       uses: actions/setup-java@v4
       with:
@@ -38,66 +55,162 @@ jobs:
         distribution: 'temurin'
         cache: 'maven'
         
-    # 3. 从标签提取版本号
-    - name: Extract version from tag
-      id: extract-version
-      run: |
-        # 提取版本号（兼容 v1.0.0 和 v1.0）
-        VERSION=$(echo "${{ github.ref }}" | sed 's/refs\/tags\/v//')
-        echo "RELEASE_VERSION=$VERSION" >> $GITHUB_ENV
-        echo "Using version: $VERSION"
+    - name: Set up Maven
+      uses: stCarolas/setup-maven@v1.6.0
+      with:
+        maven-version: 3.8.6
         
-    # 4. 设置Maven版本
-    - name: Set Maven version
+    - name: Verify project structure
       run: |
-        mvn versions:set -DnewVersion=${{ env.RELEASE_VERSION }}
-        
-    # 5. 构建插件
-    - name: Build plugin with Maven
-      run: mvn -B clean package
-      
-    # 6. 验证构建产物
-    - name: Verify artifacts
-      run: |
-        echo "Generated files:"
-        ls -la target/
-        if [ ! -f "target/JoinMessage-${{ env.RELEASE_VERSION }}.jar" ]; then
-          echo "ERROR: JAR file not found!"
+        echo "工作目录: ${{ github.workspace }}"
+        ls -la
+        if [ ! -f "pom.xml" ]; then
+          echo "❌ 错误: pom.xml 文件不存在！"
           exit 1
         fi
+        
+    # ================ 版本处理阶段 ================
+    - name: Determine version
+      id: version-step
+      run: |
+        # 手动运行时使用输入参数
+        if [ -n "${{ github.event.inputs.tag }}" ]; then
+          VERSION=${{ github.event.inputs.tag }}
+        else
+          # 自动触发时从标签提取
+          VERSION=${GITHUB_REF#refs/tags/v}
+        fi
+        
+        # 清理版本号（移除可能的前缀）
+        CLEAN_VERSION=$(echo "$VERSION" | sed 's/^v//i')
+        echo "RELEASE_VERSION=$CLEAN_VERSION" >> $GITHUB_ENV
+        echo "MAVEN_VERSION=$CLEAN_VERSION" >> $GITHUB_ENV
+        echo "使用版本: $CLEAN_VERSION"
+        
+        # 设置输出供后续步骤使用
+        echo "version=$CLEAN_VERSION" >> $GITHUB_OUTPUT
+    
+    # ================ 构建阶段 ================
+    - name: Set Maven version
+      run: |
+        echo "正在设置 Maven 版本: ${{ env.MAVEN_VERSION }}"
+        mvn -B versions:set -DnewVersion=${{ env.MAVEN_VERSION }} -DgenerateBackupPoms=false
+        echo "版本设置完成"
+        
+    - name: Build plugin with Maven
+      run: |
+        # 根据输入决定是否跳过测试
+        BUILD_CMD="mvn -B clean package"
+        
+        if [ "${{ inputs.skip_tests }}" = "true" ]; then
+          BUILD_CMD="$BUILD_CMD -DskipTests"
+          echo "跳过测试"
+        fi
+        
+        echo "执行构建命令: $BUILD_CMD"
+        $BUILD_CMD
+        
+        # 验证构建结果
+        if [ ! -f "target/JoinMessage-${{ env.MAVEN_VERSION }}.jar" ]; then
+          echo "❌ 错误: JAR 文件未生成！"
+          exit 1
+        fi
+        
+        echo "✅ 构建成功"
       
-    # 7. 创建GitHub Release
+    # ================ 发布阶段 ================
+    - name: Verify artifacts
+      run: |
+        echo "生成的文件:"
+        ls -la target/
+        
+        JAR_FILE="target/JoinMessage-${{ env.MAVEN_VERSION }}.jar"
+        if [ ! -f "$JAR_FILE" ]; then
+          echo "❌ 错误: 主 JAR 文件不存在"
+          exit 1
+        fi
+        
+        # 检查文件大小
+        JAR_SIZE=$(wc -c < "$JAR_FILE")
+        MIN_SIZE=50000  # 50KB
+        
+        if [ "$JAR_SIZE" -lt $MIN_SIZE ]; then
+          echo "❌ 错误: JAR 文件过小 (${JAR_SIZE} 字节)，可能构建失败"
+          exit 1
+        fi
+        
+        echo "✅ 产物验证通过 (大小: ${JAR_SIZE} 字节)"
+      
     - name: Create GitHub Release
-      uses: softprops/action-gh-release@v2
+      id: create-release
+      uses: softprops/action-gh-release@v2.8.0
       with:
         files: |
-          target/*.jar  # 使用通配符确保匹配
+          target/*.jar
         name: JoinMessage ${{ env.RELEASE_VERSION }}
         tag_name: v${{ env.RELEASE_VERSION }}
         body: |
           ## JoinMessage ${{ env.RELEASE_VERSION }}
           
           ### 安装说明
-          1. 下载 JAR 文件
+          1. 下载下面的 JAR 文件
           2. 放入服务器的 `plugins` 文件夹
           3. 重启服务器
           
-          [查看完整文档](https://github.com/${{ github.repository }})
+          ### 构建信息
+          - **日期**: ${{ steps.date.outputs.current_date }}
+          - **提交**: [${{ github.sha }}](https://github.com/${{ github.repository }}/commit/${{ github.sha }})
+          - **工作流**: [#${{ github.run_number }}](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})
+          
+          [查看完整文档](https://github.com/${{ github.repository }}#readme)
         draft: false
         prerelease: false
+        generate_release_notes: true
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    
+    # ================ 成功通知 ================
+    - name: Success Notification
+      if: success()
+      run: |
+        echo "✅ 发布成功: JoinMessage v${{ env.RELEASE_VERSION }}"
+        echo "下载地址: ${{ steps.create-release.outputs.html_url }}"
         
-    # 8. 失败通知
+    # ================ 失败处理阶段 ================
+    - name: Get current date
+      if: failure()
+      id: date
+      run: echo "current_date=$(date +'%Y-%m-%d %H:%M:%S')" >> $GITHUB_OUTPUT
+      
     - name: Notify on Failure
       if: failure()
-      uses: actions/github-script@v7
-      with:
-        script: |
-          const message = `🚨 发布失败: ${{ github.repository }}@v${{ env.RELEASE_VERSION }}`;
-          github.rest.issues.createComment({
-            issue_number: context.issue.number,
-            owner: context.repo.owner,
-            repo: context.repo.repo,
-            body: message
-          });
+      run: |
+        # 准备错误信息
+        ERROR_MSG="🚨 **发布失败**: JoinMessage v${{ env.RELEASE_VERSION }}"
+        ERROR_MSG+="\n\n**仓库**: ${{ github.repository }}"
+        ERROR_MSG+="\n**工作流**: [#${{ github.run_number }}](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})"
+        ERROR_MSG+="\n**时间**: ${{ steps.date.outputs.current_date }}"
+        ERROR_MSG+="\n\n### 错误详情"
+        ERROR_MSG+="\n请查看 [工作流日志](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}) 获取详细信息"
+        
+        # 创建 Issue
+        if [ -n "${{ secrets.GITHUB_TOKEN }}" ]; then
+          echo "创建问题报告..."
+          curl -X POST \
+            -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+            -H "Accept: application/vnd.github.v3+json" \
+            "https://api.github.com/repos/${{ github.repository }}/issues" \
+            -d '{
+              "title": "Release v${{ env.RELEASE_VERSION }} Failed",
+              "body": "'"${ERROR_MSG}"'",
+              "labels": ["bug", "release-failed"]
+            }'
+        else
+          echo "GITHUB_TOKEN 不可用，无法创建问题"
+        fi
+        
+        # 输出到日志
+        echo -e "\n\n$ERROR_MSG"
+        
+        # 确保工作流标记为失败
+        exit 1
