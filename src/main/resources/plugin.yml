@@ -1,0 +1,7 @@
+name: JoinMessage
+version: 1.0.0
+main: cn.littl19642.joinmessage.JoinMessage
+api-version: 1.13
+authors: [littl19642]
+depend: [PlaceholderAPI]
+softdepend: []
