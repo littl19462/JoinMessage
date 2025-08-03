@@ -1,31 +1,51 @@
-name: 构建插件
+name: Build and Release
 
 on:
   push:
     branches: [ main ]
   pull_request:
     branches: [ main ]
+  # 添加标签推送触发
+  push:
+    tags:
+      - 'v*' # 推送以v开头的标签时触发
 
 jobs:
   build:
     runs-on: ubuntu-latest
-    
+
     steps:
-    - name: 检出代码
-      uses: actions/checkout@v4
+    - uses: actions/checkout@v4
       
-    - name: 设置JDK 17
+    - name: Set up JDK 17
       uses: actions/setup-java@v4
       with:
         java-version: '17'
         distribution: 'temurin'
         cache: 'maven'
         
-    - name: 使用Maven构建
+    - name: Build with Maven
       run: mvn -B package --file pom.xml
       
-    - name: 上传构建产物
+    - name: Upload Artifact
       uses: actions/upload-artifact@v4
       with:
         name: JoinMessage
         path: target/JoinMessage-*.jar
+      
+    # 添加自动发布步骤
+    - name: Create Release
+      if: startsWith(github.ref, 'refs/tags/v')
+      uses: softprops/action-gh-release@v2
+      with:
+        files: target/JoinMessage-*.jar
+        body: |
+          JoinMessage 插件 ${{ github.ref_name }} 版本
+          
+          包含以下更新：
+          - 自动构建的插件版本
+          - 兼容 Paper 1.12.2-1.21.9
+        draft: false
+        prerelease: false
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
