@@ -1,0 +1,15 @@
+# 消息配置
+messages:
+  join: "&e%player% 加入了游戏"  # 加入消息 (%player% = 玩家名)
+  quit: "&e%player% 离开了游戏" # 退出消息
+  hitokoto: "&b今日一言: &f%hitokoto%" # 一言消息格式
+
+# 一言功能
+hitokoto:
+  enabled: true  # 是否启用
+  delay: 3       # 延迟发送时间(秒)
+
+# 整点报时
+time-announce:
+  enabled: true  # 是否启用
+  message: "&a现在是北京时间: &6%time%" # 报时消息格式
