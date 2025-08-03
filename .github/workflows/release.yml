@@ -1,9 +1,19 @@
 name: Build and Release Plugin
 
 on:
+  # 添加手动触发支持
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: '要构建的标签 (例如 v1.0.0)'
+        required: true
+        default: 'v1.0.0'
+        type: string
+  
+  # 保留原有的自动触发
   push:
     tags:
-      - 'v*'   # 确保是小写 v 开头
+      - 'v*'
 
 jobs:
   build-and-release:
